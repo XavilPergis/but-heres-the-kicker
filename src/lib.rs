@@ -30,47 +30,100 @@ pub struct AhdsrParams {
     pub release_time: FloatParam,
 }
 
-impl AhdsrParams {
-    pub fn from_max_ahdr_times(
-        factor: f32,
-        attack: f32,
-        hold: f32,
-        decay: f32,
-        release: f32,
-    ) -> Self {
-        let attack_range = FloatRange::Skewed {
-            min: 0.0,
-            max: attack,
-            factor,
-        };
-        let hold_range = FloatRange::Skewed {
-            min: 0.0,
-            max: hold,
-            factor,
-        };
-        let decay_range = FloatRange::Skewed {
-            min: 0.0,
-            max: decay,
-            factor,
-        };
-        let release_range = FloatRange::Skewed {
-            min: 0.0,
-            max: release,
-            factor,
-        };
+#[derive(Copy, Clone, Debug)]
+pub struct AhdsrValues {
+    pub attack: f32,
+    pub hold: f32,
+    pub decay: f32,
+    pub sustain: f32,
+    pub release: f32,
+}
+
+impl AhdsrValues {
+    fn ahdr_all(time: f32) -> Self {
+        Self::ahdr(time, time, time, time)
+    }
+    fn ahdr(attack: f32, hold: f32, decay: f32, release: f32) -> Self {
+        Self::ahdsr(attack, hold, decay, 1.0, release)
+    }
+    fn ahdsr(attack: f32, hold: f32, decay: f32, sustain: f32, release: f32) -> Self {
         Self {
-            attack_time: FloatParam::new("Attack Time", 1.0, attack_range)
-                .with_unit(" s")
-                .with_smoother(SmoothingStyle::Linear(5.0)),
-            hold_time: FloatParam::new("Hold Time", 1.0, hold_range)
-                .with_unit(" s")
-                .with_smoother(SmoothingStyle::Linear(5.0)),
-            decay_time: FloatParam::new("Decay Time", 1.0, decay_range)
-                .with_unit(" s")
-                .with_smoother(SmoothingStyle::Linear(5.0)),
-            release_time: FloatParam::new("Release Time", 1.0, release_range)
-                .with_unit(" s")
-                .with_smoother(SmoothingStyle::Linear(5.0)),
+            attack,
+            hold,
+            decay,
+            sustain,
+            release,
+        }
+    }
+    fn time_for_stage(&self, stage: AhdsrStage) -> Option<f32> {
+        match stage {
+            AhdsrStage::NotTriggered => None,
+            AhdsrStage::Attack => Some(self.attack),
+            AhdsrStage::Hold => Some(self.hold),
+            AhdsrStage::Decay => Some(self.decay),
+            AhdsrStage::Sustain => None,
+            AhdsrStage::Release => Some(self.release),
+        }
+    }
+}
+
+impl AhdsrParams {
+    pub fn new(
+        prefix: &str,
+        factor: f32,
+        min_values: AhdsrValues,
+        max_values: AhdsrValues,
+        default_values: AhdsrValues,
+    ) -> Self {
+        Self {
+            attack_time: FloatParam::new(
+                format!("{prefix}Attack Time"),
+                default_values.attack,
+                FloatRange::Skewed {
+                    min: min_values.attack,
+                    max: max_values.attack,
+                    factor,
+                },
+            )
+            .with_unit(" s")
+            .with_smoother(SmoothingStyle::Linear(5.0))
+            .with_value_to_string(Arc::new(|value| format!("{value:.2}"))),
+            hold_time: FloatParam::new(
+                format!("{prefix}Hold Time"),
+                default_values.hold,
+                FloatRange::Skewed {
+                    min: min_values.hold,
+                    max: max_values.hold,
+                    factor,
+                },
+            )
+            .with_unit(" s")
+            .with_smoother(SmoothingStyle::Linear(5.0))
+            .with_value_to_string(Arc::new(|value| format!("{value:.2}"))),
+            decay_time: FloatParam::new(
+                format!("{prefix}Decay Time"),
+                default_values.decay,
+                FloatRange::Skewed {
+                    min: min_values.decay,
+                    max: max_values.decay,
+                    factor,
+                },
+            )
+            .with_unit(" s")
+            .with_smoother(SmoothingStyle::Linear(5.0))
+            .with_value_to_string(Arc::new(|value| format!("{value:.2}"))),
+            release_time: FloatParam::new(
+                format!("{prefix}Release Time"),
+                default_values.release,
+                FloatRange::Skewed {
+                    min: min_values.release,
+                    max: max_values.release,
+                    factor,
+                },
+            )
+            .with_unit(" s")
+            .with_smoother(SmoothingStyle::Linear(5.0))
+            .with_value_to_string(Arc::new(|value| format!("{value:.2}"))),
             sustain_level: FloatParam::new(
                 "Sustain Value",
                 1.0,
@@ -82,7 +135,13 @@ impl AhdsrParams {
 
 impl Default for AhdsrParams {
     fn default() -> Self {
-        Self::from_max_ahdr_times(FloatRange::skew_factor(-2.0), 10.0, 10.0, 10.0, 10.0)
+        Self::new(
+            "",
+            FloatRange::skew_factor(-2.0),
+            AhdsrValues::ahdr_all(0.0),
+            AhdsrValues::ahdr_all(10.0),
+            AhdsrValues::ahdr_all(1.0),
+        )
     }
 }
 
@@ -96,6 +155,8 @@ pub struct KickParams {
     pub start_freq: FloatParam,
     #[id = "end_freq"]
     pub end_freq: FloatParam,
+    #[id = "phase_offset"]
+    pub phase_offset: FloatParam,
 }
 
 impl Default for KickSynth {
@@ -116,21 +177,19 @@ impl Default for KickSynth {
 impl Default for KickParams {
     fn default() -> Self {
         Self {
-            // amp_env: AhdsrParams::default(),
-            // pitch_env: AhdsrParams::default(),
-            amp_env: AhdsrParams::from_max_ahdr_times(
+            amp_env: AhdsrParams::new(
+                "Amp ",
                 FloatRange::skew_factor(-2.0),
-                10.0,
-                10.0,
-                10.0,
-                10.0,
+                AhdsrValues::ahdr_all(0.0),
+                AhdsrValues::ahdr_all(10.0),
+                AhdsrValues::ahdsr(0.0, 0.0, 0.5, 0.0, 0.5),
             ),
-            pitch_env: AhdsrParams::from_max_ahdr_times(
-                FloatRange::skew_factor(-3.0),
-                1.0,
-                1.0,
-                1.0,
-                1.0,
+            pitch_env: AhdsrParams::new(
+                "Pitch ",
+                FloatRange::skew_factor(-2.0),
+                AhdsrValues::ahdr_all(0.0),
+                AhdsrValues::ahdr_all(1.0),
+                AhdsrValues::ahdsr(0.0, 0.0, 0.025, 0.0, 0.025),
             ),
             start_freq: FloatParam::new(
                 "Start Freq",
@@ -154,6 +213,12 @@ impl Default for KickParams {
             )
             .with_value_to_string(formatters::v2s_f32_hz_then_khz_with_note_name(0, true))
             .with_string_to_value(formatters::s2v_f32_hz_then_khz()),
+            phase_offset: FloatParam::new(
+                "Phase Offset",
+                0.25,
+                FloatRange::Linear { min: 0.0, max: 1.0 },
+            )
+            .with_step_size(0.01),
         }
     }
 }
@@ -215,7 +280,7 @@ impl Plugin for KickSynth {
                         self.last_midi_note = Some(note);
                         self.amp_env_state.trigger(true);
                         self.pitch_env_state.trigger(true);
-                        // self.osc_state.phase = 0.0;
+                        self.osc_state.phase = self.params.phase_offset.modulated_plain_value();
                     }
                     NoteEvent::NoteOff { note, .. } if Some(note) == self.last_midi_note => {
                         self.last_midi_note = None;
@@ -238,7 +303,6 @@ impl Plugin for KickSynth {
             let freq = lerp(pitch_env, end_freq, start_freq);
 
             let osc_scample = amp_env * osc_sine(self.osc_state.advance(freq));
-            // let osc_scample = osc_sine(self.osc_state.advance(self.midi_frequency));
 
             for sample in channel_samples.iter_mut() {
                 *sample = osc_scample;
@@ -348,23 +412,36 @@ impl AhdsrState {
     fn set_stage(&mut self, stage: AhdsrStage) {
         self.current_stage = stage;
         self.samples_since_stage_start = 0;
-        self.last_value_at_transition = self.current;
+        let (start, _) = stage.endpoint_values(self.current, self.sustain);
+        self.current = start;
+        self.last_value_at_transition = start;
     }
 
     fn advance(&mut self) -> f32 {
-        let phase_time = match self.current_stage {
-            AhdsrStage::NotTriggered => return 0.0,
-            AhdsrStage::Sustain => return self.sustain,
-            AhdsrStage::Attack => self.attack,
-            AhdsrStage::Hold => self.hold,
-            AhdsrStage::Decay => self.decay,
-            AhdsrStage::Release => self.release,
+        let seconds_per_sample = self.sample_rate.recip();
+
+        let stage_time = loop {
+            let time = match self.current_stage {
+                // neither of these stages have a time associated with them, so just bail early.
+                AhdsrStage::NotTriggered => return 0.0,
+                AhdsrStage::Sustain => return self.sustain,
+
+                AhdsrStage::Attack => self.attack,
+                AhdsrStage::Hold => self.hold,
+                AhdsrStage::Decay => self.decay,
+                AhdsrStage::Release => self.release,
+            };
+            if time > 0.0 {
+                // shatter the fabric of spacetime, etc.
+                break time;
+            }
+            // skip to the next stage that isn't zero-length
+            self.set_stage(self.current_stage.next());
         };
 
-        let seconds_per_sample = self.sample_rate.recip();
         let mut time_since_stage_start = self.samples_since_stage_start as f32 * seconds_per_sample;
 
-        if time_since_stage_start >= phase_time {
+        if time_since_stage_start >= stage_time {
             self.set_stage(self.current_stage.next());
             time_since_stage_start = 0.0;
         }
@@ -373,12 +450,8 @@ impl AhdsrState {
         let (start_value, end_value) = self
             .current_stage
             .endpoint_values(self.last_value_at_transition, self.sustain);
-        let t = if phase_time == 0.0 {
-            1.0
-        } else {
-            time_since_stage_start / phase_time
-        };
-        self.current = lerp(t * t, start_value, end_value);
+        let t = time_since_stage_start / stage_time;
+        self.current = lerp(t, start_value.powf(0.5), end_value.powf(0.5)).powf(2.0);
         self.current
     }
 }
